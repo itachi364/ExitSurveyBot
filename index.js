@@ -20,10 +20,14 @@ if (!DISCORD_TOKEN) {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,   // importante para GuildMemberRemove
-    GatewayIntentBits.DirectMessages  // para manejar DMs
+    GatewayIntentBits.GuildMembers,    // necesario para GuildMemberAdd / Remove
+    GatewayIntentBits.DirectMessages   // necesario para enviar DMs
   ],
-  partials: [Partials.Channel]        // necesario para DMs
+  partials: [
+    Partials.Channel,      // DMs
+    Partials.User,
+    Partials.GuildMember
+  ]
 });
 
 client.once(Events.ClientReady, (c) => {
@@ -31,57 +35,92 @@ client.once(Events.ClientReady, (c) => {
 });
 
 /**
- * Se dispara cuando un miembro abandona el servidor:
- * - Salida voluntaria
- * - Kick
- * - Ban
- * (Discord no distingue directamente, pero para la encuesta nos sirve igual.)
+ * Cuando un miembro entra al servidor:
+ * - Se intenta enviar un DM de bienvenida con el link a la encuesta.
  */
-client.on(Events.GuildMemberRemove, async (member) => {
+client.on(Events.GuildMemberAdd, async (member) => {
+  console.log("➡️ GuildMemberAdd:", {
+    id: member.id,
+    tag: member.user?.tag
+  });
+
   try {
     const user = member.user;
 
-    // 1) Intentamos enviar DM
     const dmMessage =
-      `Hola **${user.username}**, vimos que has salido del servidor **${member.guild.name}**.\n\n` +
-      `Nos ayudaría mucho entender tu experiencia para mejorar la comunidad.\n\n` +
-      `📝 **Encuesta de salida:**\n${SURVEY_URL || "👉 (no se ha configurado SURVEY_URL)"}\n\n` +
-      `¡Gracias por tu tiempo y por haber hecho parte del servidor! 🙌`;
+      `¡Hola **${user.username}**, bienvenido a **${member.guild.name}**! 🎉\n\n` +
+      `Nos alegra que te unas a la comunidad.\n\n` +
+      `Si algún día decides irte, nos ayudaría mucho conocer tu opinión para mejorar el servidor.\n\n` +
+      `📝 **Encuesta de salida (puedes guardarla):**\n` +
+      `${SURVEY_URL || "👉 (no se ha configurado SURVEY_URL)"}\n\n` +
+      `¡Disfruta tu estancia en el servidor!`;
 
     await user.send(dmMessage);
-    console.log(`DM de encuesta enviado a ${user.tag} (${user.id})`);
+    console.log(`DM de bienvenida enviado a ${user.tag} (${user.id})`);
 
-    // 2) Log opcional en un canal del servidor
+    // Log opcional
     if (LOG_CHANNEL_ID) {
       const logChannel = await member.guild.channels
         .fetch(LOG_CHANNEL_ID)
         .catch(() => null);
 
       if (logChannel && logChannel.isTextBased()) {
-        console.log(`👋 **${user.tag}** (${user.id}) ha salido del servidor. Se intentó enviar DM con encuesta.`);
         await logChannel.send(
-          `👋 **${user.tag}** (${user.id}) ha salido del servidor. Se intentó enviar DM con encuesta.`
+          `✅ Se envió DM de bienvenida con encuesta a **${user.tag}** (${user.id}).`
         );
       }
     }
   } catch (err) {
     console.warn(
-      `No pude enviar DM de encuesta a ${member.user?.tag ?? member.id}:`,
-      err.message
+      `No pude enviar DM de bienvenida a ${member.user?.tag ?? member.id}:`,
+      err
     );
 
-    // Log de fallo si hay canal de log
     if (LOG_CHANNEL_ID) {
       const logChannel = await member.guild.channels
         .fetch(LOG_CHANNEL_ID)
         .catch(() => null);
 
       if (logChannel && logChannel.isTextBased()) {
-        await logChannel.send(
-          `⚠️ No se pudo enviar DM de encuesta a **${member.user?.tag ?? member.id}** (quizá tenga los DMs cerrados o bloqueado al bot).`
-        );
+        if (err.code === 50007) {
+          await logChannel.send(
+            `⚠️ No se pudo enviar DM de bienvenida a **${member.user?.tag ?? member.id}** porque Discord no permite enviarle mensajes directos (configuración de privacidad o bloqueo).`
+          );
+        } else {
+          await logChannel.send(
+            `⚠️ Error inesperado al enviar DM de bienvenida a **${member.user?.tag ?? member.id}**. Código: \`${err.code}\`.`
+          );
+        }
       }
     }
+  }
+});
+
+/**
+ * Opcional: mantener GuildMemberRemove solo para log,
+ * sin depender de poder enviar DM en ese momento.
+ */
+client.on(Events.GuildMemberRemove, async (member) => {
+  console.log("➡️ GuildMemberRemove:", {
+    id: member.id,
+    tag: member.user?.tag
+  });
+
+  if (!LOG_CHANNEL_ID) return;
+
+  try {
+    const logChannel = await member.guild.channels
+      .fetch(LOG_CHANNEL_ID)
+      .catch(() => null);
+
+    if (logChannel && logChannel.isTextBased()) {
+      await logChannel.send(
+        `👋 **${member.user?.tag ?? member.id}** ha salido del servidor. ` +
+        `Ya había recibido el link de la encuesta al entrar.`
+      );
+    }
+  } catch (err) {
+    console.warn("Error enviando log de salida:", err);
   }
 });
 
